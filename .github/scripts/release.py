@@ -18,8 +18,6 @@ import os
 import sys
 from pathlib import Path
 
-TARGETS = {"x86_64-unknown-linux-gnu": "x86_64 Linux", "aarch64-unknown-linux-gnu": "aarch64 Linux"}
-
 
 def release_json(out: Path) -> str:
     e = os.environ
@@ -44,75 +42,38 @@ def release_json(out: Path) -> str:
     )
 
 
-def size(n: int) -> str:
-    for unit in ("B", "KiB", "MiB"):
-        if n < 1024 or unit == "MiB":
-            return f"{n} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1024
-    raise AssertionError
-
-
-def install(kind: str, assets: list[dict], url) -> list[str]:
-    """Shell lines for the files a workflow's default build makes; none for custom .release output."""
-    if kind == "bun":
-        return [f"bun add {url(a)}" for a in assets if a["name"].endswith(".tgz")]
-    if kind == "uv":
-        return [f"uv pip install {url(a)}" for a in assets if a["name"].endswith(".whl")]
-    if kind == "rust":
-        lines = []
-        for target, platform in TARGETS.items():
-            for a in assets:
-                if a["name"].endswith(f"-{target}.tar.gz"):
-                    lines += [f"# {platform}", f"curl -fsSL {url(a)} | tar -xz"]
-        return lines
-    return []
-
-
 def notes(release: dict) -> str:
+    """What changed, then where it came from. Install instructions belong in the repo's README."""
     e = os.environ
-    repo, tag, source = release["repo"], release["tag"], release["source"]
-    version = tag.removeprefix("v")
+    repo, tag, source, commit, run = (release[k] for k in ("repo", "tag", "source", "commit", "run"))
     builder = e["GITHUB_REPOSITORY"]
-    assets = release["assets"]
-    kind = Path(release["workflow"].split("@")[0]).stem
-
-    def url(a: dict) -> str:
-        return f"https://github.com/{builder}/releases/download/{repo}-{tag}/{a['name']}"
-
     out = []
+
     text = e.get("NOTES", "").strip()
     # A tag message that only repeats the name and version says nothing.
-    if text and text not in {f"{repo} {version}", f"{repo} {tag}", tag, version}:
+    if text and text not in {f"{repo} {tag.removeprefix('v')}", f"{repo} {tag}"}:
         out += [text, ""]
 
-    if lines := install(kind, assets, url):
-        out += ["## Install", "", "```sh", *lines, "```", ""]
-
-    out += ["## Downloads", "", "| File | Size |", "|---|--:|"]
-    out += [f"| [{a['name']}]({url(a)}) | {size(a['size'])} |" for a in assets]
-    out += ["", "<details><summary>SHA-256</summary>", "", "```"]
-    out += [f"{a['sha256']}  {a['name']}" for a in assets]
-    out += ["```", "", "</details>", ""]
-
-    commit = release["commit"]
     fmt = release.get("object_format", "sha1").upper().replace("SHA", "SHA-")
-    # The verify example names a real file: x86_64 if there is one, else the first.
-    example = next((a["name"] for a in assets if "x86_64" in a["name"]), assets[0]["name"])
-    out += ["## Provenance", ""]
-    out.append(
-        f"- Source: tag [`{tag}`]({source}/tag/?h={tag}) of [{source.split('://')[-1]}]({source}),"
+    origin = (
+        f"Tag [`{tag}`]({source}/tag/?h={tag}) of [{source.split('://')[-1]}]({source}),"
         f" commit [`{commit[:12]}`]({source}/commit/?id={commit}) ({fmt})"
     )
     if signer := e.get("SIGNER", "").split():
         principal, *key, fingerprint = signer
-        out.append(
-            f"- Tag signed by `{principal}` ({' '.join(key)} `{fingerprint}`), checked against"
-            f" [`allowed_signers`](https://github.com/{builder}/blob/main/allowed_signers)"
+        origin += (
+            f", signed by `{principal}` ({' '.join(key)} `{fingerprint}`, in"
+            f" [`allowed_signers`](https://github.com/{builder}/blob/main/allowed_signers))"
         )
-    run = release["run"]
-    out.append(f"- Built from a clean runner by `{kind}.yml`, [run {run.rsplit('/', 1)[-1]}]({run})")
-    out.append(f"- [Build provenance attestation]({release['attestation']}) (Sigstore). Verify a download:")
-    out += ["", "  ```sh", f"  gh attestation verify {example} --repo {builder}", "  ```"]
+    kind = Path(release["workflow"].split("@")[0]).stem
+    built = (
+        f"Built on a clean runner by `{kind}.yml` in [run {run.rsplit('/', 1)[-1]}]({run}), with a"
+        f" [build provenance attestation]({release['attestation']}) (Sigstore) to check any file against:"
+    )
+    # The example names a real file: x86_64 if there is one, else the first.
+    example = next((a["name"] for a in release["assets"] if "x86_64" in a["name"]), release["assets"][0]["name"])
+    out += ["## Provenance", "", f"{origin}. {built}", "", "```sh"]
+    out += [f"gh attestation verify {example} --repo {builder}", "```"]
     return "\n".join(out) + "\n"
 
 

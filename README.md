@@ -49,7 +49,8 @@ notes name the source commit on git.vkut.me, whose tag is signed by `code@vkut.m
    (Sigstore) and creates the release with them and `release.json` (source, commit, run,
    attestation, sha256 of every file), which git.vkut.me reads to show download buttons. The
    notes ([`release.py`](.github/scripts/release.py)) lead with the version's changelog section
-   (else the tag message), then install commands, downloads and provenance.
+   (else the tag message), then its provenance. Install instructions live in each repo's README,
+   never in the release.
 
 Release builds start from a fresh runner with no caches.
 
