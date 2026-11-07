@@ -5,7 +5,7 @@
                                       REPO TAG COMMIT TAG_OBJECT OBJECT_FORMAT SOURCE_BASE RUN_URL
                                       ATTESTATION_URL GITHUB_WORKFLOW_REF
     release.py notes <release.json>   the notes (Markdown); NOTES = the changelog section or tag
-                                      message, SIGNER = "<principal> <key type> <fingerprint>",
+                                      message, SIGNER = the allowed_signers principal,
                                       GITHUB_REPOSITORY = this repo
 
 The notes come from release.json alone (plus NOTES and SIGNER), so published releases can be
@@ -54,26 +54,29 @@ def notes(release: dict) -> str:
     if text and text not in {f"{repo} {tag.removeprefix('v')}", f"{repo} {tag}"}:
         out += [text, ""]
 
-    fmt = release.get("object_format", "sha1").upper().replace("SHA", "SHA-")
-    origin = (
-        f"Tag [`{tag}`]({source}/tag/?h={tag}) of [{source.split('://')[-1]}]({source}),"
-        f" commit [`{commit[:12]}`]({source}/commit/?id={commit}) ({fmt})"
-    )
-    if signer := e.get("SIGNER", "").split():
-        principal, *key, fingerprint = signer
-        origin += (
-            f", signed by `{principal}` ({' '.join(key)} `{fingerprint}`, in"
-            f" [`allowed_signers`](https://github.com/{builder}/blob/main/allowed_signers))"
-        )
+    signers = f"https://github.com/{builder}/blob/main/allowed_signers"
+    principal = e.get("SIGNER", "").strip()
     kind = Path(release["workflow"].split("@")[0]).stem
-    built = (
-        f"Built on a clean runner by `{kind}.yml` in [run {run.rsplit('/', 1)[-1]}]({run}), with a"
-        f" [build provenance attestation]({release['attestation']}) (Sigstore) to check any file against:"
-    )
+    row = [
+        f"[`{tag}`]({source}/tag/?h={tag}) at [`{commit[:12]}`]({source}/commit/?id={commit})",
+        f"[`{principal}`]({signers})" if principal else "",
+        f"[`{kind}.yml`]({run})",
+    ]
     # The example names a real file: x86_64 if there is one, else the first.
     example = next((a["name"] for a in release["assets"] if "x86_64" in a["name"]), release["assets"][0]["name"])
-    out += ["## Provenance", "", f"{origin}. {built}", "", "```sh"]
-    out += [f"gh attestation verify {example} --repo {builder}", "```"]
+    out += [
+        "## Provenance",
+        "",
+        f"| [{source.split('://')[-1]}]({source}) | Signed by | Built by |",
+        "|---|---|---|",
+        f"| {' | '.join(row)} |",
+        "",
+        f"Check any file against its [build provenance attestation]({release['attestation']}):",
+        "",
+        "```sh",
+        f"gh attestation verify {example} --repo {builder}",
+        "```",
+    ]
     return "\n".join(out) + "\n"
 
 

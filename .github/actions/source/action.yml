@@ -23,7 +23,7 @@ outputs:
     description: sha1 or sha256
     value: ${{ steps.source.outputs.object_format }}
   signer:
-    description: '"<principal> <key type> <fingerprint>" of the tag signature'
+    description: The allowed_signers principal whose key signed the tag
     value: ${{ steps.source.outputs.signer }}
   notes:
     description: The version's CHANGES.md/CHANGELOG.md section, else the tag message
@@ -53,7 +53,7 @@ runs:
           echo "$sig"; echo "::error::$TAG is not signed by a key in allowed_signers"; exit 1
         fi
         echo "$sig"
-        signer="$(sed -n 's/^Good "git" signature for \(.*\) with \(.*\) key \(SHA256:[^ ]*\).*/\1 \2 \3/p' <<<"$sig")"
+        signer="$(sed -n 's/^Good "git" signature for \(.*\) with .* key SHA256:.*/\1/p' <<<"$sig")"
         # The signature covers the tag object, not the ref: refuse a signed tag served under another name.
         [ "$(git -C src cat-file tag "refs/tags/$TAG" | sed -n '1,/^$/s/^tag //p')" = "$TAG" ] ||
           { echo "::error::refs/tags/$TAG points at a tag object named differently"; exit 1; }
