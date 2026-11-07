@@ -1,0 +1,93 @@
+# Bun/TypeScript releases. Bun: the version in package.json packageManager (bun@x.y.z), else latest.
+#   bun install --frozen-lockfile --ignore-scripts, version check (package.json == tag),
+#   typecheck and test scripts if defined, then
+#   - the "release" script if defined (writes the files to publish into $OUT), else
+#   - the "build" script if defined, then bun pm pack into $OUT.
+# An executable .release in the repo replaces all of it.
+name: bun
+run-name: ${{ inputs.repo }} ${{ inputs.tag }} (bun)
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Repository on git.vkut.me
+        required: true
+        type: string
+      tag:
+        description: Signed tag (v1.2.3 or v1.2.3-rc.1)
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ inputs.repo }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      tag_object: ${{ steps.source.outputs.tag_object }}
+      object_format: ${{ steps.source.outputs.object_format }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: builder
+          persist-credentials: false
+      - id: source
+        uses: ./builder/.github/actions/source
+        with:
+          repo: ${{ inputs.repo }}
+          tag: ${{ inputs.tag }}
+
+      - name: Bun version
+        working-directory: src
+        run: |
+          v="$(jq -r '.packageManager // "" | select(startswith("bun@")) | ltrimstr("bun@")' package.json)"
+          echo "BUN_VERSION=${v:-latest}" >>"$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Build
+        working-directory: src
+        run: |
+          set -euo pipefail
+          if [ -x .release ]; then ./.release; exit 0; fi
+          has() { jq -e --arg s "$1" '.scripts[$s] // empty' package.json >/dev/null; }
+          v="$(jq -r .version package.json)"
+          [ "$v" = "$VERSION" ] || { echo "::error::package.json version $v does not match $TAG"; exit 1; }
+          bun install --frozen-lockfile --ignore-scripts
+          for s in typecheck test; do
+            if has "$s"; then bun run "$s"; fi
+          done
+          if has release; then
+            bun run release
+          else
+            if has build; then bun run build; fi
+            bun pm pack --destination "$OUT"
+          fi
+
+      - uses: ./builder/.github/actions/collect
+        with:
+          name: bun
+
+  publish:
+    needs: build
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/_publish.yml
+    with:
+      repo: ${{ inputs.repo }}
+      tag: ${{ inputs.tag }}
+      commit: ${{ needs.build.outputs.commit }}
+      tag_object: ${{ needs.build.outputs.tag_object }}
+      object_format: ${{ needs.build.outputs.object_format }}

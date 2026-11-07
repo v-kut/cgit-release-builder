@@ -1,0 +1,88 @@
+# Shared last step of every language workflow: attest the files the build jobs uploaded
+# (out-* artifacts) and create the GitHub release <repo>-<tag> with them plus release.json, which
+# git.vkut.me reads for its download buttons. The only job with write access.
+name: publish
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+      commit:
+        type: string
+        required: true
+      tag_object:
+        type: string
+        required: true
+      object_format:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: out-*
+          merge-multiple: true
+          path: out
+
+      - name: Attest
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: out/*
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ inputs.repo }}
+          TAG: ${{ inputs.tag }}
+          COMMIT: ${{ inputs.commit }}
+          TAG_OBJECT: ${{ inputs.tag_object }}
+          OBJECT_FORMAT: ${{ inputs.object_format }}
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+          SOURCE_BASE: https://git.vkut.me
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          export RUN_URL="$run_url"
+          python3 - >release.json <<'EOF'
+          import hashlib, json, os, pathlib
+          e = os.environ
+          assets = [
+              {"name": p.name, "size": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+              for p in sorted(pathlib.Path("out").iterdir())
+          ]
+          print(json.dumps({
+              "repo": e["REPO"], "tag": e["TAG"], "source": f'{e["SOURCE_BASE"]}/{e["REPO"]}',
+              "commit": e["COMMIT"], "tag_object": e["TAG_OBJECT"], "object_format": e["OBJECT_FORMAT"],
+              "workflow": e["GITHUB_WORKFLOW_REF"], "run": e["RUN_URL"], "attestation": e["ATTESTATION_URL"],
+              "assets": assets,
+          }, indent=2))
+          EOF
+          {
+            echo "**$REPO $TAG** from [$SOURCE_BASE/$REPO]($SOURCE_BASE/$REPO/tag/?h=$TAG), commit \`$COMMIT\`."
+            echo
+            echo "Built by [this run]($run_url). Provenance: [attestation]($ATTESTATION_URL)."
+            echo
+            echo '```'
+            (cd out && sha256sum -- *)
+            echo '```'
+            echo
+            echo "Verify: \`gh attestation verify <file> --repo $GITHUB_REPOSITORY\`"
+          } >notes.md
+          gh release create "$REPO-$TAG" out/* release.json -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "$REPO $TAG" --notes-file notes.md --latest=false

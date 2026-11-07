@@ -1,0 +1,74 @@
+# Python releases with uv (Python from .python-version / requires-python):
+#   version check (project version == tag), uv build (sdist + wheel) into $OUT.
+# An executable .release in the repo replaces the build.
+name: uv
+run-name: ${{ inputs.repo }} ${{ inputs.tag }} (uv)
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Repository on git.vkut.me
+        required: true
+        type: string
+      tag:
+        description: Signed tag (v1.2.3 or v1.2.3-rc.1)
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ inputs.repo }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      tag_object: ${{ steps.source.outputs.tag_object }}
+      object_format: ${{ steps.source.outputs.object_format }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: builder
+          persist-credentials: false
+      - id: source
+        uses: ./builder/.github/actions/source
+        with:
+          repo: ${{ inputs.repo }}
+          tag: ${{ inputs.tag }}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+
+      - name: Build
+        working-directory: src
+        run: |
+          set -euo pipefail
+          if [ -x .release ]; then ./.release; exit 0; fi
+          v="$(uv version --short)"
+          [ "$v" = "$VERSION" ] || { echo "::error::project version $v does not match $TAG"; exit 1; }
+          uv build --out-dir "$OUT"
+
+      - uses: ./builder/.github/actions/collect
+        with:
+          name: uv
+
+  publish:
+    needs: build
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/_publish.yml
+    with:
+      repo: ${{ inputs.repo }}
+      tag: ${{ inputs.tag }}
+      commit: ${{ needs.build.outputs.commit }}
+      tag_object: ${{ needs.build.outputs.tag_object }}
+      object_format: ${{ needs.build.outputs.object_format }}

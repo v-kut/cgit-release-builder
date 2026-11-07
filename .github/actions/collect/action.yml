@@ -1,0 +1,29 @@
+name: collect
+description: >-
+  Check the files in $OUT (regular files with plain names only) and upload them as the workflow
+  artifact out-<name> for the publish job.
+inputs:
+  name:
+    description: Artifact name suffix (unique per build job)
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        cd "$OUT"
+        shopt -s nullglob dotglob
+        files=(*)
+        [ ${#files[@]} -gt 0 ] || { echo "::error::nothing was written to \$OUT"; exit 1; }
+        for f in "${files[@]}"; do
+          [ -f "$f" ] && [ ! -L "$f" ] || { echo "::error::$f: only regular files go in \$OUT (tar directories)"; exit 1; }
+          [[ "$f" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ && "$f" != release.json ]] || { echo "::error::bad file name '$f'"; exit 1; }
+        done
+        { echo '```'; sha256sum -- "${files[@]}"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: out-${{ inputs.name }}
+        path: ${{ env.OUT }}/
+        if-no-files-found: error
+        retention-days: 1

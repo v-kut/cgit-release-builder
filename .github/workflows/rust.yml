@@ -1,0 +1,113 @@
+# Rust releases: one job per target on a native runner (toolchain from rust-toolchain.toml, else
+# stable). Version check (root package == tag), cargo test, cargo build --release --locked, then
+# every binary of the root package as <bin>-<version>-<target>.tar.gz (with README/LICENSE files).
+# An executable .release in the repo replaces the build (it gets TARGET).
+name: rust
+run-name: ${{ inputs.repo }} ${{ inputs.tag }} (rust)
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Repository on git.vkut.me
+        required: true
+        type: string
+      tag:
+        description: Signed tag (v1.2.3 or v1.2.3-rc.1)
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ inputs.repo }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      tag_object: ${{ steps.source.outputs.tag_object }}
+      object_format: ${{ steps.source.outputs.object_format }}
+    env:
+      TARGET: ${{ matrix.target }}
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: builder
+          persist-credentials: false
+      - id: source
+        uses: ./builder/.github/actions/source
+        with:
+          repo: ${{ inputs.repo }}
+          tag: ${{ inputs.tag }}
+
+      - name: Toolchain
+        working-directory: src
+        run: |
+          set -euo pipefail
+          if [ -f rust-toolchain.toml ] || [ -f rust-toolchain ]; then
+            rustup toolchain install
+          else
+            rustup toolchain install stable --profile minimal
+            rustup default stable
+          fi
+          rustc --version --verbose
+
+      - name: Build
+        working-directory: src
+        run: |
+          set -euo pipefail
+          if [ -x .release ]; then ./.release; exit 0; fi
+          meta="$(cargo metadata --format-version 1 --no-deps --locked)"
+          root="$(jq -c --arg m "$PWD/Cargo.toml" '.packages[] | select(.manifest_path == $m)' <<<"$meta")"
+          [ -n "$root" ] || { echo "::error::no package in the root Cargo.toml"; exit 1; }
+          v="$(jq -r .version <<<"$root")"
+          [ "$v" = "$VERSION" ] || { echo "::error::Cargo.toml version $v does not match $TAG"; exit 1; }
+          mapfile -t bins < <(jq -r '.targets[] | select(.kind | index("bin")) | .name' <<<"$root")
+          [ ${#bins[@]} -gt 0 ] || { echo "::error::the root package has no binaries"; exit 1; }
+
+          export RUSTFLAGS="--remap-path-prefix=$PWD=. --remap-path-prefix=$HOME/.cargo=/cargo"
+          cargo test --locked --release --target "$TARGET"
+          cargo build --locked --release --target "$TARGET"
+
+          shopt -s nullglob
+          extra=(README* LICENSE* COPYING* LICENSES CHANGES.md CHANGELOG.md)
+          for bin in "${bins[@]}"; do
+            stage="$RUNNER_TEMP/stage/$bin-$VERSION-$TARGET"
+            mkdir -p "$stage"
+            install -m 755 "target/$TARGET/release/$bin" "$stage/"
+            [ ${#extra[@]} -eq 0 ] || cp -r -- "${extra[@]}" "$stage/"
+            tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
+              -C "$RUNNER_TEMP/stage" -cf - "$bin-$VERSION-$TARGET" | gzip -9n >"$OUT/$bin-$VERSION-$TARGET.tar.gz"
+          done
+
+      - uses: ./builder/.github/actions/collect
+        with:
+          name: ${{ matrix.target }}
+
+  publish:
+    needs: build
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/_publish.yml
+    with:
+      repo: ${{ inputs.repo }}
+      tag: ${{ inputs.tag }}
+      commit: ${{ needs.build.outputs.commit }}
+      tag_object: ${{ needs.build.outputs.tag_object }}
+      object_format: ${{ needs.build.outputs.object_format }}

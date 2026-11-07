@@ -1,0 +1,65 @@
+name: source
+description: >-
+  Check the inputs, clone the tag from git.vkut.me into ./src and verify that it is an annotated tag
+  signed by a key in allowed_signers. Refuses tags that are already released and, if the repo has a
+  CHANGES.md/CHANGELOG.md, tags without a "## [<version>]" section. Exports OUT (empty directory for
+  the files to publish), TAG, VERSION (tag without the v) and SOURCE_DATE_EPOCH (commit time).
+inputs:
+  repo:
+    description: Repository on git.vkut.me
+    required: true
+  tag:
+    description: Signed tag
+    required: true
+outputs:
+  commit:
+    description: Tagged commit
+    value: ${{ steps.source.outputs.commit }}
+  tag_object:
+    description: Tag object id
+    value: ${{ steps.source.outputs.tag_object }}
+  object_format:
+    description: sha1 or sha256
+    value: ${{ steps.source.outputs.object_format }}
+runs:
+  using: composite
+  steps:
+    - id: source
+      shell: bash
+      env:
+        REPO: ${{ inputs.repo }}
+        TAG: ${{ inputs.tag }}
+        GH_TOKEN: ${{ github.token }}
+        SIGNERS: ${{ github.action_path }}/../../../allowed_signers
+        SOURCE_BASE: https://git.vkut.me
+      run: |
+        set -euo pipefail
+        [[ "$REPO" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$ ]] || { echo "::error::invalid repo name"; exit 1; }
+        [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::invalid tag"; exit 1; }
+        if gh release view "$REPO-$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          echo "::error::$REPO $TAG is already released (releases are immutable)"; exit 1
+        fi
+
+        git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TAG" "$SOURCE_BASE/$REPO.git" src
+        [ "$(git -C src cat-file -t "refs/tags/$TAG")" = tag ] || { echo "::error::$TAG is not an annotated tag"; exit 1; }
+        git -C src -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$(realpath "$SIGNERS")" verify-tag "refs/tags/$TAG"
+
+        version="${TAG#v}"
+        for f in CHANGES.md CHANGELOG.md; do
+          if [ -f "src/$f" ] && ! grep -qF "## [$version]" "src/$f"; then
+            echo "::error::$f has no '## [$version]' section"; exit 1
+          fi
+        done
+
+        {
+          echo "commit=$(git -C src rev-parse HEAD)"
+          echo "tag_object=$(git -C src rev-parse "refs/tags/$TAG")"
+          echo "object_format=$(git -C src rev-parse --show-object-format)"
+        } >>"$GITHUB_OUTPUT"
+        mkdir -p "$RUNNER_TEMP/out"
+        {
+          echo "OUT=$RUNNER_TEMP/out"
+          echo "TAG=$TAG"
+          echo "VERSION=$version"
+          echo "SOURCE_DATE_EPOCH=$(git -C src log -1 --format=%ct)"
+        } >>"$GITHUB_ENV"
