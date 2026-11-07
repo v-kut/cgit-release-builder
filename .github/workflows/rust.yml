@@ -83,8 +83,11 @@ jobs:
           cargo test --locked --release --target "$TARGET"
           cargo build --locked --release --target "$TARGET"
 
-          shopt -s nullglob
-          extra=(README* LICENSE* COPYING* LICENSES CHANGES.md CHANGELOG.md)
+          # LICENSE* also matches the LICENSES/ directory; plain names stay in the list even if missing.
+          extra=()
+          for f in README* LICENSE* COPYING* CHANGES.md CHANGELOG.md; do
+            if [ -e "$f" ]; then extra+=("$f"); fi
+          done
           for bin in "${bins[@]}"; do
             stage="$RUNNER_TEMP/stage/$bin-$VERSION-$TARGET"
             mkdir -p "$stage"
