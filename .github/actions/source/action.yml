@@ -3,7 +3,8 @@ description: >-
   Check the inputs, clone the tag from git.vkut.me into ./src and verify that it is an annotated tag
   signed by a key in allowed_signers. Refuses tags that are already released and, if the repo has a
   CHANGES.md/CHANGELOG.md, tags without a "## [<version>]" section. Exports OUT (empty directory for
-  the files to publish), TAG, VERSION (tag without the v) and SOURCE_DATE_EPOCH (commit time).
+  the files to publish), TAG, VERSION (tag without the v) and SOURCE_DATE_EPOCH (commit time);
+  outputs the signer and the release notes (that changelog section, else the tag message).
 inputs:
   repo:
     description: Repository on git.vkut.me
@@ -21,6 +22,12 @@ outputs:
   object_format:
     description: sha1 or sha256
     value: ${{ steps.source.outputs.object_format }}
+  signer:
+    description: '"<principal> <key type> <fingerprint>" of the tag signature'
+    value: ${{ steps.source.outputs.signer }}
+  notes:
+    description: The version's CHANGES.md/CHANGELOG.md section, else the tag message
+    value: ${{ steps.source.outputs.notes }}
 runs:
   using: composite
   steps:
@@ -42,22 +49,33 @@ runs:
 
         git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TAG" "$SOURCE_BASE/$REPO.git" src
         [ "$(git -C src cat-file -t "refs/tags/$TAG")" = tag ] || { echo "::error::$TAG is not an annotated tag"; exit 1; }
-        git -C src -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$(realpath "$SIGNERS")" verify-tag "refs/tags/$TAG"
+        if ! sig="$(git -C src -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$(realpath "$SIGNERS")" verify-tag "refs/tags/$TAG" 2>&1)"; then
+          echo "$sig"; echo "::error::$TAG is not signed by a key in allowed_signers"; exit 1
+        fi
+        echo "$sig"
+        signer="$(sed -n 's/^Good "git" signature for \(.*\) with \(.*\) key \(SHA256:[^ ]*\).*/\1 \2 \3/p' <<<"$sig")"
         # The signature covers the tag object, not the ref: refuse a signed tag served under another name.
         [ "$(git -C src cat-file tag "refs/tags/$TAG" | sed -n '1,/^$/s/^tag //p')" = "$TAG" ] ||
           { echo "::error::refs/tags/$TAG points at a tag object named differently"; exit 1; }
 
         version="${TAG#v}"
+        notes=""
         for f in CHANGES.md CHANGELOG.md; do
-          if [ -f "src/$f" ] && ! grep -qF "## [$version]" "src/$f"; then
-            echo "::error::$f has no '## [$version]' section"; exit 1
+          if [ -f "src/$f" ]; then
+            grep -qF "## [$version]" "src/$f" || { echo "::error::$f has no '## [$version]' section"; exit 1; }
+            # The section's body, without Keep a Changelog's link definitions.
+            [ -n "$notes" ] || notes="$(awk -v h="## [$version]" 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on && !/^\[[^]]*\]: / { print }' "src/$f")"
           fi
         done
+        [ -n "${notes//[[:space:]]/}" ] || notes="$(git -C src tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$TAG")"
+        delim="EOF_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 
         {
           echo "commit=$(git -C src rev-parse HEAD)"
           echo "tag_object=$(git -C src rev-parse "refs/tags/$TAG")"
           echo "object_format=$(git -C src rev-parse --show-object-format)"
+          echo "signer=$signer"
+          printf 'notes<<%s\n%s\n%s\n' "$delim" "$notes" "$delim"
         } >>"$GITHUB_OUTPUT"
         mkdir -p "$RUNNER_TEMP/out"
         {

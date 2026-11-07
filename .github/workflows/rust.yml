@@ -40,6 +40,8 @@ jobs:
       commit: ${{ steps.source.outputs.commit }}
       tag_object: ${{ steps.source.outputs.tag_object }}
       object_format: ${{ steps.source.outputs.object_format }}
+      signer: ${{ steps.source.outputs.signer }}
+      notes: ${{ steps.source.outputs.notes }}
     env:
       TARGET: ${{ matrix.target }}
       CARGO_TERM_COLOR: always
@@ -114,3 +116,5 @@ jobs:
       commit: ${{ needs.build.outputs.commit }}
       tag_object: ${{ needs.build.outputs.tag_object }}
       object_format: ${{ needs.build.outputs.object_format }}
+      signer: ${{ needs.build.outputs.signer }}
+      notes: ${{ needs.build.outputs.notes }}

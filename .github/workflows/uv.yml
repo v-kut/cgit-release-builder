@@ -32,6 +32,8 @@ jobs:
       commit: ${{ steps.source.outputs.commit }}
       tag_object: ${{ steps.source.outputs.tag_object }}
       object_format: ${{ steps.source.outputs.object_format }}
+      signer: ${{ steps.source.outputs.signer }}
+      notes: ${{ steps.source.outputs.notes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,3 +74,5 @@ jobs:
       commit: ${{ needs.build.outputs.commit }}
       tag_object: ${{ needs.build.outputs.tag_object }}
       object_format: ${{ needs.build.outputs.object_format }}
+      signer: ${{ needs.build.outputs.signer }}
+      notes: ${{ needs.build.outputs.notes }}

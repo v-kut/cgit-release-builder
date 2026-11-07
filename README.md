@@ -47,7 +47,9 @@ notes name the source commit on git.vkut.me, whose tag is signed by `code@vkut.m
    access) attests the files with
    [artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations)
    (Sigstore) and creates the release with them and `release.json` (source, commit, run,
-   attestation, sha256 of every file), which git.vkut.me reads to show download buttons.
+   attestation, sha256 of every file), which git.vkut.me reads to show download buttons. The
+   notes ([`release.py`](.github/scripts/release.py)) lead with the version's changelog section
+   (else the tag message), then install commands, downloads and provenance.
 
 Release builds start from a fresh runner with no caches.
 
