@@ -1,0 +1,10 @@
+version = 1
+SPDX-PackageName = "cgit-release-builder"
+SPDX-PackageSupplier = "Vsevolod Kutsyn <code@vkut.me>"
+SPDX-PackageDownloadLocation = "https://github.com/v-kut/cgit-release-builder"
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Vsevolod Kutsyn <code@vkut.me>"
+SPDX-License-Identifier = "CC0-1.0"
