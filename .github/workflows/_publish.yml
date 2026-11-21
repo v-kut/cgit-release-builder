@@ -50,8 +50,11 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: out-*
-          merge-multiple: true
-          path: out
+          merge-multiple: false
+          path: raw
+
+      - name: Collect artifacts
+        run: python3 builder/.github/scripts/release.py collect raw out
 
       - name: Attest
         id: attest
@@ -76,5 +79,7 @@ jobs:
           export RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           python3 builder/.github/scripts/release.py json out >release.json
           python3 builder/.github/scripts/release.py notes release.json >notes.md
+          flags=()
+          if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
           gh release create "$REPO-$TAG" out/* release.json -R "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" --title "$REPO $TAG" --notes-file notes.md --latest=false
+            --target "$GITHUB_SHA" --title "$REPO $TAG" --notes-file notes.md --latest=false "${flags[@]}"
