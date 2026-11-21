@@ -24,7 +24,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      tag_object: ${{ steps.source.outputs.tag_object }}
+      object_format: ${{ steps.source.outputs.object_format }}
+      signer: ${{ steps.source.outputs.signer }}
+      notes: ${{ steps.source.outputs.notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: builder
+          persist-credentials: false
+      - id: source
+        uses: ./builder/.github/actions/source
+        with:
+          repo: ${{ inputs.repo }}
+          tag: ${{ inputs.tag }}
+
   build:
+    needs: prepare
     strategy:
       matrix:
         include:
@@ -36,12 +59,6 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-    outputs:
-      commit: ${{ steps.source.outputs.commit }}
-      tag_object: ${{ steps.source.outputs.tag_object }}
-      object_format: ${{ steps.source.outputs.object_format }}
-      signer: ${{ steps.source.outputs.signer }}
-      notes: ${{ steps.source.outputs.notes }}
     env:
       TARGET: ${{ matrix.target }}
       CARGO_TERM_COLOR: always
@@ -55,6 +72,7 @@ jobs:
         with:
           repo: ${{ inputs.repo }}
           tag: ${{ inputs.tag }}
+          expected_tag_object: ${{ needs.prepare.outputs.tag_object }}
 
       - name: Toolchain
         working-directory: src
@@ -85,9 +103,9 @@ jobs:
           cargo test --locked --release --target "$TARGET"
           cargo build --locked --release --target "$TARGET"
 
-          # LICENSE* also matches the LICENSES/ directory; plain names stay in the list even if missing.
+          # LICENSE*/LICENCE* also match LICENSES/; plain names stay in the list even if missing.
           extra=()
-          for f in README* LICENSE* COPYING* CHANGES.md CHANGELOG.md; do
+          for f in README* LICENSE* LICENCE* COPYING* CHANGES.md CHANGELOG.md; do
             if [ -e "$f" ]; then extra+=("$f"); fi
           done
           for bin in "${bins[@]}"; do
@@ -104,7 +122,7 @@ jobs:
           name: ${{ matrix.target }}
 
   publish:
-    needs: build
+    needs: [prepare, build]
     permissions:
       contents: write
       id-token: write
@@ -113,8 +131,8 @@ jobs:
     with:
       repo: ${{ inputs.repo }}
       tag: ${{ inputs.tag }}
-      commit: ${{ needs.build.outputs.commit }}
-      tag_object: ${{ needs.build.outputs.tag_object }}
-      object_format: ${{ needs.build.outputs.object_format }}
-      signer: ${{ needs.build.outputs.signer }}
-      notes: ${{ needs.build.outputs.notes }}
+      commit: ${{ needs.prepare.outputs.commit }}
+      tag_object: ${{ needs.prepare.outputs.tag_object }}
+      object_format: ${{ needs.prepare.outputs.object_format }}
+      signer: ${{ needs.prepare.outputs.signer }}
+      notes: ${{ needs.prepare.outputs.notes }}
