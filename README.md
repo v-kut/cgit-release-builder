@@ -36,7 +36,7 @@ notes name the source commit on git.vkut.me, whose tag is signed by `code@vkut.m
    | Workflow | Build |
    |---|---|
    | [`bun`](.github/workflows/bun.yml) | Bun from `packageManager`; `package.json` version must match the tag; `bun install --frozen-lockfile --ignore-scripts`; `typecheck` and `test` scripts if defined; then the `release` script if defined (writes to `$OUT`), else `build` (if defined) + `bun pm pack` |
-   | [`uv`](.github/workflows/uv.yml) | project version must match the tag; `uv build` (sdist + wheel) |
+   | [`uv`](.github/workflows/uv.yml) | project version must match the tag (PEP 440); if `uv.lock` is present, `uv sync --locked` and `pytest` (if installed); `uv build` (sdist + wheel) |
    | [`rust`](.github/workflows/rust.yml) | per target (x86_64 and aarch64 Linux, native runners); toolchain from `rust-toolchain.toml`, else stable; `Cargo.toml` version must match the tag; `cargo test` + `cargo build --release --locked`; each binary as `<bin>-<version>-<target>.tar.gz` with README/licence files |
 
    An executable `.release` script in the repo replaces the build step of any workflow. It runs
@@ -46,7 +46,7 @@ notes name the source commit on git.vkut.me, whose tag is signed by `code@vkut.m
 3. **publish** ([`_publish.yml`](.github/workflows/_publish.yml), the only job with write
    access) attests the files with
    [artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations)
-   (Sigstore) and creates the release with them and `release.json` (source, commit, run,
+   (Sigstore) and creates the release with them and `release.json` (source, commit, signer, run,
    attestation, sha256 of every file), which git.vkut.me reads to show download buttons. The
    notes ([`release.py`](.github/scripts/release.py)) lead with the version's changelog section
    (else the tag message), then its provenance. Install instructions live in each repo's README,
