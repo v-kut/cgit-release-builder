@@ -31,19 +31,29 @@ def sha256(path: Path) -> str:
 def collect(raw: Path, out: Path) -> None:
     if not raw.is_dir():
         sys.exit(f"::error::{raw}: no release artifacts found")
+    entries = sorted(raw.iterdir())
+    if not entries:
+        sys.exit("::error::no release artifacts found")
     out.mkdir(parents=True, exist_ok=True)
+    # download-artifact extracts a single matching artifact directly into `raw`, and creates one
+    # subdirectory per artifact when multiple match.
+    if all(p.is_dir() and not p.is_symlink() for p in entries):
+        buckets = [(b.name, sorted(b.iterdir())) for b in entries]
+    elif all(p.is_file() and not p.is_symlink() for p in entries):
+        buckets = [(raw.name, entries)]
+    else:
+        bad = next(p for p in entries if p.is_symlink() or not p.is_dir())
+        sys.exit(f"::error::unexpected entry '{bad.name}' in downloaded artifacts")
     seen: dict[str, str] = {}
-    for bucket in sorted(raw.iterdir()):
-        if not bucket.is_dir() or bucket.is_symlink():
-            sys.exit(f"::error::unexpected entry '{bucket.name}' in downloaded artifacts")
-        for p in sorted(bucket.iterdir()):
+    for name, files in buckets:
+        for p in files:
             if p.is_symlink() or not p.is_file():
-                sys.exit(f"::error::{bucket.name}/{p.name}: only regular files are allowed")
+                sys.exit(f"::error::{name}/{p.name}: only regular files are allowed")
             if not NAME_RE.match(p.name) or p.name == "release.json":
-                sys.exit(f"::error::bad file name '{p.name}' in {bucket.name}")
+                sys.exit(f"::error::bad file name '{p.name}' in {name}")
             if p.name in seen:
-                sys.exit(f"::error::duplicate artifact file '{p.name}' (in {seen[p.name]} and {bucket.name})")
-            seen[p.name] = bucket.name
+                sys.exit(f"::error::duplicate artifact file '{p.name}' (in {seen[p.name]} and {name})")
+            seen[p.name] = name
             p.rename(out / p.name)
     if not seen:
         sys.exit("::error::no release artifacts found")

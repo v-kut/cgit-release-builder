@@ -25,6 +25,27 @@ class CollectTests(unittest.TestCase):
                 ["app-1.0.0-aarch64.tar.gz", "app-1.0.0-x86_64.tar.gz"],
             )
 
+    def test_collect_handles_single_flat_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            raw, out = Path(tmp, "raw"), Path(tmp, "out")
+            raw.mkdir()
+            (raw / "app-1.0.0.tar.gz").write_bytes(b"pkg")
+
+            release.collect(raw, out)
+
+            self.assertEqual([p.name for p in out.iterdir()], ["app-1.0.0.tar.gz"])
+
+    def test_collect_rejects_mixed_files_and_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            raw, out = Path(tmp, "raw"), Path(tmp, "out")
+            (raw / "out-a").mkdir(parents=True)
+            (raw / "out-a" / "a.tar.gz").write_bytes(b"a")
+            (raw / "stray.tar.gz").write_bytes(b"b")
+
+            with self.assertRaises(SystemExit) as ctx:
+                release.collect(raw, out)
+            self.assertIn("unexpected entry", str(ctx.exception))
+
     def test_collect_rejects_duplicate_filename(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             raw, out = Path(tmp, "raw"), Path(tmp, "out")
