@@ -12,6 +12,10 @@ inputs:
   tag:
     description: Signed tag
     required: true
+  expected_tag_object:
+    description: Require the fetched tag object id to match this value
+    required: false
+    default: ""
 outputs:
   commit:
     description: Tagged commit
@@ -36,6 +40,7 @@ runs:
       env:
         REPO: ${{ inputs.repo }}
         TAG: ${{ inputs.tag }}
+        EXPECTED_TAG_OBJECT: ${{ inputs.expected_tag_object }}
         GH_TOKEN: ${{ github.token }}
         SIGNERS: ${{ github.action_path }}/../../../allowed_signers
         SOURCE_BASE: https://git.vkut.me
@@ -47,32 +52,55 @@ runs:
           echo "::error::$REPO $TAG is already released (releases are immutable)"; exit 1
         fi
 
-        git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TAG" "$SOURCE_BASE/$REPO.git" src
+        ref="$(git ls-remote --refs "$SOURCE_BASE/$REPO.git" "refs/tags/$TAG")"
+        [ -n "$ref" ] || { echo "::error::tag $TAG not found in $REPO"; exit 1; }
+        remote_oid="${ref%%[[:space:]]*}"
+        case "${#remote_oid}" in
+          40) objfmt=sha1 ;;
+          64) objfmt=sha256 ;;
+          *) echo "::error::unexpected object id '$remote_oid' for $TAG"; exit 1 ;;
+        esac
+        git init --quiet --object-format="$objfmt" src
+        git -C src fetch --quiet --depth 1 --no-tags "$SOURCE_BASE/$REPO.git" "refs/tags/$TAG:refs/tags/$TAG"
+
         [ "$(git -C src cat-file -t "refs/tags/$TAG")" = tag ] || { echo "::error::$TAG is not an annotated tag"; exit 1; }
         if ! sig="$(git -C src -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$(realpath "$SIGNERS")" verify-tag "refs/tags/$TAG" 2>&1)"; then
           echo "$sig"; echo "::error::$TAG is not signed by a key in allowed_signers"; exit 1
         fi
         echo "$sig"
         signer="$(sed -n 's/^Good "git" signature for \(.*\) with .* key SHA256:.*/\1/p' <<<"$sig")"
+        [ -n "$signer" ] || { echo "::error::could not parse signer from verify-tag output"; exit 1; }
         # The signature covers the tag object, not the ref: refuse a signed tag served under another name.
         [ "$(git -C src cat-file tag "refs/tags/$TAG" | sed -n '1,/^$/s/^tag //p')" = "$TAG" ] ||
           { echo "::error::refs/tags/$TAG points at a tag object named differently"; exit 1; }
+        tag_object="$(git -C src rev-parse "refs/tags/$TAG")"
+        if [ -n "$EXPECTED_TAG_OBJECT" ] && [ "$tag_object" != "$EXPECTED_TAG_OBJECT" ]; then
+          echo "::error::tag object $tag_object does not match expected $EXPECTED_TAG_OBJECT"; exit 1
+        fi
+        commit="$(git -C src rev-parse --verify "refs/tags/$TAG^{commit}")" ||
+          { echo "::error::$TAG does not point to a commit"; exit 1; }
+        git -C src -c advice.detachedHead=false checkout --quiet --detach "$commit"
 
         version="${TAG#v}"
         notes=""
         for f in CHANGES.md CHANGELOG.md; do
           if [ -f "src/$f" ]; then
-            grep -qF "## [$version]" "src/$f" || { echo "::error::$f has no '## [$version]' section"; exit 1; }
-            # The section's body, without Keep a Changelog's link definitions.
-            [ -n "$notes" ] || notes="$(awk -v h="## [$version]" 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on && !/^\[[^]]*\]: / { print }' "src/$f")"
+            body="$(awk -v h="## [$version]" '
+              { sub(/\r$/, "") }
+              !found && ($0 == h || index($0, h " ") == 1) { found = 1; on = 1; next }
+              on && /^## / { on = 0; exit }
+              on && !/^\[[^]]*\]: / { print }
+              END { if (!found) exit 2 }
+            ' "src/$f")" || { echo "::error::$f has no '## [$version]' section"; exit 1; }
+            [ -n "$notes" ] || notes="$body"
           fi
         done
         [ -n "${notes//[[:space:]]/}" ] || notes="$(git -C src tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$TAG")"
         delim="EOF_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 
         {
-          echo "commit=$(git -C src rev-parse HEAD)"
-          echo "tag_object=$(git -C src rev-parse "refs/tags/$TAG")"
+          echo "commit=$commit"
+          echo "tag_object=$tag_object"
           echo "object_format=$(git -C src rev-parse --show-object-format)"
           echo "signer=$signer"
           printf 'notes<<%s\n%s\n%s\n' "$delim" "$notes" "$delim"
